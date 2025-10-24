@@ -11,20 +11,37 @@ if (!ODDS_API_KEY) {
 app.use(express.static("public"))
 
 let cache = { odds: null, oddsTs: 0, scores: null, scoresTs: 0, live: true, bookmaker: "draftkings" }
-const CACHE_MS = 120_000
+const CACHE_MS = 60_000
+// --- Game hour window control ---
+function inGameWindow() {
+  const now = new Date()
+  const hourET = now.getUTCHours() - 4 // adjust for Eastern Time (UTC-4)
+  // Game window: 7 PM to 11 PM ET
+  return hourET >= 19 || hourET < 23
+}
+
 
 app.get("/api/odds", async (req, res) => {
   try {
     const live = true
     const bookmaker = req.query.bookmaker || "draftkings"
+
+    // Outside game window. Do not hit upstream. Serve cache if available.
+    if (!inGameWindow()) {
+      console.log("Outside game window. Serving cached odds.")
+      return res.json(cache.odds || [])
+    }
+
     const now = Date.now()
 
+    // Within window. Use cache if still fresh.
     if (cache.odds && now - cache.oddsTs < CACHE_MS && cache.live === live && cache.bookmaker === bookmaker) {
       return res.json(cache.odds)
     }
 
     const base = "https://api.the-odds-api.com/v4/sports/basketball_nba/odds"
     const url = new URL(base)
+
     url.searchParams.set("regions", "us")
     url.searchParams.set("markets", "totals")
     url.searchParams.set("bookmakers", bookmaker)
