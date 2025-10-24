@@ -83,6 +83,7 @@
     chart: null,
     selectedGameId: null,
     lastRows: [],
+    filteredRows: [],
     scoreMap: new Map()
   }
 
@@ -121,7 +122,8 @@
   function minutesElapsed(period, clock) {
     if (!period || !clock) return null
     const [mm, ss] = clock.split(":").map(Number)
-    const elapsedInPeriod = (period <= 4 ? 12 : 5) - mm - ss/60
+    const perLen = period <= 4 ? 12 : 5
+    const elapsedInPeriod = perLen - mm - ss/60
     if (period <= 4) return (period - 1) * 12 + Math.max(0, elapsedInPeriod)
     const otNum = period - 4
     return 48 + (otNum - 1) * 5 + Math.max(0, elapsedInPeriod)
@@ -164,6 +166,15 @@
     return Math.round((latest.y - oldest.y) * 10) / 10
   }
 
+  function metricsForRow(r, sc) {
+    const projection = paceProjection(sc.home_score, sc.away_score, sc.period, sc.clock)
+    const currentTotal = (sc.home_score != null && sc.away_score != null) ? (Number(sc.home_score) + Number(sc.away_score)) : null
+    const gap = (projection != null && typeof r.total_point === "number") ? Math.round((projection - r.total_point) * 10) / 10 : null
+    const pace = pacePercent(currentTotal, r.total_point, sc.period, sc.clock)
+    const d5 = delta5m(r.id)
+    return { projection, currentTotal, gap, pace, d5 }
+  }
+
   function renderTable(rows) {
     const q = document.getElementById("search").value.toLowerCase().trim()
     const gapThres = Number(document.getElementById("gapThres").value) || 5
@@ -179,18 +190,15 @@
       return !q || s.includes(q)
     })
 
+    state.filteredRows = filtered
+
     if (filtered.length === 1) state.selectedGameId = filtered[0].id
     else if (!state.selectedGameId || !filtered.find(r => r.id === state.selectedGameId)) state.selectedGameId = null
 
     for (const r of filtered) {
       const sKey = `${r.away_team}__${r.home_team}`.toLowerCase()
       const sc = state.scoreMap.get(sKey) || {}
-
-      const projection = paceProjection(sc.home_score, sc.away_score, sc.period, sc.clock)
-      const gap = (projection != null && typeof r.total_point === "number") ? Math.round((projection - r.total_point) * 10) / 10 : null
-      const currentTotal = (sc.home_score != null && sc.away_score != null) ? (Number(sc.home_score) + Number(sc.away_score)) : null
-      const pace = pacePercent(currentTotal, r.total_point, sc.period, sc.clock)
-      const d5 = delta5m(r.id)
+      const { projection, currentTotal, gap, pace, d5 } = metricsForRow(r, sc)
 
       const tr = document.createElement("tr")
       tr.dataset.id = r.id
@@ -360,8 +368,10 @@
 
   document.getElementById("refresh").addEventListener("click", fetchAll)
   for (const id of ["search","todayOnly","gapThres","showLive","showProj"]) {
-    document.getElementById(id).addEventListener("input", () => { renderTable(state.lastRows); renderChart() })
-    document.getElementById(id).addEventListener("change", () => { renderTable(state.lastRows); renderChart() })
+    const el = document.getElementById(id)
+    if (!el) continue
+    el.addEventListener("input", () => { renderTable(state.lastRows); renderChart() })
+    el.addEventListener("change", () => { renderTable(state.lastRows); renderChart() })
   }
   document.getElementById("liveToggle").addEventListener("change", fetchAll)
 
