@@ -1,0 +1,341 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>NBA Live Totals Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0"></script>
+  <style>
+    body { font-family: system-ui, -apple-system, Arial; margin: 20px; color: #e8e8e8; background: #121212 }
+    h1 { font-size: 20px; margin: 0 0 12px }
+    .controls { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-bottom: 12px }
+    input[type="text"], input[type="number"] { padding: 8px 10px; border: 1px solid #444; background: #1c1c1c; color: #fff; border-radius: 6px }
+    button, select, label { padding: 8px 12px; border: 1px solid #444; background: #1c1c1c; color: #fff; border-radius: 6px; cursor: pointer }
+    .banner { padding: 8px 12px; background: #3b0f0f; color: #fff; border: 1px solid #6b1b1b; border-radius: 6px; margin-bottom: 12px; display: none }
+    .grid { width: 100%; overflow-x: auto; margin: 12px 0 16px }
+    table { width: 100%; border-collapse: collapse; font-size: 14px }
+    th, td { padding: 8px; border-bottom: 1px solid #2a2a2a; text-align: left; white-space: nowrap }
+    th { color: #bbb }
+    .muted { color: #aaa }
+    #wrap { height: 55vh }
+    .selected { background: #1f2a38 }
+    .hi { color: #ff9b86 }
+    .lo { color: #88d0ff }
+  </style>
+</head>
+<body>
+  <h1>NBA Live Totals Dashboard</h1>
+
+  <div class="controls">
+    <label><input type="checkbox" id="liveToggle" checked> Live</label>
+    <label><input type="checkbox" id="todayOnly" checked> Today only</label>
+    <select id="bookmaker">
+      <option value="draftkings" selected>DraftKings</option>
+    </select>
+    <input id="search" type="text" placeholder="Filter by team name">
+    <button id="refresh">Refresh now</button>
+    <span id="lastFetch" class="muted"></span>
+  </div>
+
+  <div class="controls">
+    <label>Alert gap ≥ <input id="gapThres" type="number" min="1" max="20" value="5"></label>
+    <label><input type="checkbox" id="showLive" checked> Show Live Total</label>
+    <label><input type="checkbox" id="showProj" checked> Show Projection</label>
+  </div>
+
+  <div id="error" class="banner"></div>
+
+  <div class="grid">
+    <table id="gamesTable">
+      <thead>
+        <tr>
+          <th>Away Team</th>
+          <th>Away Score</th>
+          <th>Home Team</th>
+          <th>Home Score</th>
+          <th>Current Total</th>
+          <th>Quarter</th>
+          <th>Clock</th>
+          <th>Projection</th>
+          <th>Live Total</th>
+          <th>Gap</th>
+          <th>Tipoff</th>
+          <th>Last Update</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div id="wrap">
+    <canvas id="chart"></canvas>
+  </div>
+
+  <script>
+    const REFRESH_MS = 10000
+    const MAX_POINTS = 300
+
+    const state = {
+      history: new Map(), // id -> { label, live:[], proj:[] }
+      chart: null,
+      selectedGameId: null,
+      lastRows: [],
+      scoreMap: new Map()
+    }
+
+    function gameLabel(row) {
+      return `${row.away_team} @ ${row.home_team}`
+    }
+
+    function upsertHistory(rows, scoreMap) {
+      const now = Date.now()
+      for (const r of rows) {
+        const key = r.id
+        if (!state.history.has(key)) state.history.set(key, { label: gameLabel(r), live: [], proj: [] })
+        const serie = state.history.get(key)
+        if (typeof r.total_point === "number") {
+          serie.live.push({ x: now, y: r.total_point })
+          if (serie.live.length > MAX_POINTS) serie.live.shift()
+        }
+        // compute projection from scores
+        const sKey = `${r.away_team}__${r.home_team}`.toLowerCase()
+        const sc = scoreMap.get(sKey) || {}
+        const p = paceProjection(sc.home_score, sc.away_score, sc.period, sc.clock)
+        if (typeof p === "number") {
+          serie.proj.push({ x: now, y: p })
+          if (serie.proj.length > MAX_POINTS) serie.proj.shift()
+        }
+        serie.label = gameLabel(r)
+      }
+    }
+
+    function isTodayLocal(iso) {
+      if (!iso) return false
+      const d = new Date(iso)
+      const now = new Date()
+      return d.getFullYear() === now.getFullYear()
+        && d.getMonth() === now.getMonth()
+        && d.getDate() === now.getDate()
+    }
+
+    function minutesElapsed(period, clock) {
+      if (!period || !clock) return null
+      const [mm, ss] = clock.split(":").map(Number)
+      const elapsedInPeriod = (period <= 4 ? 12 : 5) - mm - ss/60
+      if (period <= 4) return (period - 1) * 12 + Math.max(0, elapsedInPeriod)
+      const otNum = period - 4
+      return 48 + (otNum - 1) * 5 + Math.max(0, elapsedInPeriod)
+    }
+    function totalMinutes(period) { return period <= 4 ? 48 : 48 + 5 * (period - 4) }
+
+    function paceProjection(home, away, period, clock) {
+      if (home == null || away == null || period == null || clock == null) return null
+      const elapsed = minutesElapsed(period, clock)
+      if (elapsed == null || elapsed <= 0) return null
+      const total = totalMinutes(period)
+      const current = Number(home) + Number(away)
+      const frac = Math.max(elapsed / total, 0.01)
+      return Math.round((current / frac) * 10) / 10
+    }
+
+    function renderTable(rows) {
+      const q = document.getElementById("search").value.toLowerCase().trim()
+      const gapThres = Number(document.getElementById("gapThres").value) || 5
+      const todayOnly = document.getElementById("todayOnly").checked
+
+      const tbody = document.querySelector("#gamesTable tbody")
+      tbody.innerHTML = ""
+
+      let filtered = rows
+      if (todayOnly) filtered = filtered.filter(r => isTodayLocal(r.commence_time))
+
+      filtered = filtered.filter(r => {
+        const s = `${r.home_team} ${r.away_team}`.toLowerCase()
+        return !q || s.includes(q)
+      })
+
+      if (filtered.length === 1) {
+        state.selectedGameId = filtered[0].id
+      } else if (!state.selectedGameId || !filtered.find(r => r.id === state.selectedGameId)) {
+        state.selectedGameId = null
+      }
+
+      for (const r of filtered) {
+        const sKey = `${r.away_team}__${r.home_team}`.toLowerCase()
+        const sc = state.scoreMap.get(sKey) || {}
+
+        const projection = paceProjection(sc.home_score, sc.away_score, sc.period, sc.clock)
+        const gap = (projection != null && typeof r.total_point === "number") ? Math.round((projection - r.total_point) * 10) / 10 : null
+        const currentTotal = (sc.home_score != null && sc.away_score != null) ? (Number(sc.home_score) + Number(sc.away_score)) : null
+
+        const tr = document.createElement("tr")
+        tr.dataset.id = r.id
+        if (state.selectedGameId === r.id) tr.classList.add("selected")
+        tr.addEventListener("click", () => {
+          state.selectedGameId = state.selectedGameId === r.id ? null : r.id
+          renderChart()
+          renderTable(state.lastRows)
+        })
+
+        const tdAway = document.createElement("td")
+        const tdAwayScore = document.createElement("td")
+        const tdHome = document.createElement("td")
+        const tdHomeScore = document.createElement("td")
+        const tdCurrentTotal = document.createElement("td")
+        const tdQuarter = document.createElement("td")
+        const tdClock = document.createElement("td")
+        const tdProjection = document.createElement("td")
+        const tdLiveTotal = document.createElement("td")
+        const tdGap = document.createElement("td")
+        const tdComm = document.createElement("td")
+        const tdUpdate = document.createElement("td")
+
+        tdAway.textContent = r.away_team
+        tdAwayScore.textContent = sc.away_score ?? "n/a"
+        tdHome.textContent = r.home_team
+        tdHomeScore.textContent = sc.home_score ?? "n/a"
+        tdCurrentTotal.textContent = currentTotal ?? "n/a"
+        tdQuarter.textContent = sc.period ?? "n/a"
+        tdClock.textContent = sc.clock ?? "n/a"
+        tdProjection.textContent = projection ?? "n/a"
+        tdLiveTotal.textContent = r.total_point ?? "n/a"
+        tdGap.textContent = gap ?? "n/a"
+        if (gap != null && Math.abs(gap) >= gapThres) tdGap.className = gap > 0 ? "hi" : "lo"
+        tdComm.textContent = r.commence_time ? new Date(r.commence_time).toLocaleString() : "n/a"
+        tdUpdate.textContent = r.bookmaker_last_update ? new Date(r.bookmaker_last_update).toLocaleTimeString() : "n/a"
+
+        tr.appendChild(tdAway)
+        tr.appendChild(tdAwayScore)
+        tr.appendChild(tdHome)
+        tr.appendChild(tdHomeScore)
+        tr.appendChild(tdCurrentTotal)
+        tr.appendChild(tdQuarter)
+        tr.appendChild(tdClock)
+        tr.appendChild(tdProjection)
+        tr.appendChild(tdLiveTotal)
+        tr.appendChild(tdGap)
+        tr.appendChild(tdComm)
+        tr.appendChild(tdUpdate)
+        tbody.appendChild(tr)
+      }
+    }
+
+    function color(i, n) {
+      const h = Math.floor((360 * i) / Math.max(1, n))
+      return `hsl(${h},70%,55%)`
+    }
+
+    function renderChart() {
+      const ctx = document.getElementById("chart").getContext("2d")
+      let series = Array.from(state.history.entries()).map(([id, s]) => ({ id, ...s }))
+
+      const todayOnly = document.getElementById("todayOnly").checked
+      const q = document.getElementById("search").value.toLowerCase().trim()
+
+      let currentRows = state.lastRows
+      if (todayOnly) currentRows = currentRows.filter(r => isTodayLocal(r.commence_time))
+      if (q) currentRows = currentRows.filter(r => (`${r.home_team} ${r.away_team}`).toLowerCase().includes(q))
+
+      if (state.selectedGameId) {
+        series = series.filter(s => s.id === state.selectedGameId)
+      } else if (currentRows.length === 1) {
+        series = series.filter(s => s.id === currentRows[0].id)
+      } else {
+        const ids = new Set(currentRows.map(r => r.id))
+        series = series.filter(s => ids.has(s.id))
+      }
+
+      const showLive = document.getElementById("showLive").checked
+      const showProj = document.getElementById("showProj").checked
+
+      const datasets = []
+      series.forEach((s, i) => {
+        if (showLive) {
+          datasets.push({
+            label: `${s.label} • Live`,
+            data: s.live,
+            tension: 0.25,
+            borderWidth: 2,
+            borderColor: color(i, series.length),
+            pointRadius: 0,
+            fill: false
+          })
+        }
+        if (showProj) {
+          datasets.push({
+            label: `${s.label} • Proj`,
+            data: s.proj,
+            tension: 0.25,
+            borderWidth: 2,
+            borderDash: [6,3],
+            borderColor: color(i+1, series.length+1),
+            pointRadius: 0,
+            fill: false
+          })
+        }
+      })
+
+      if (!state.chart) {
+        state.chart = new Chart(ctx, {
+          type: "line",
+          data: { datasets },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: false,
+            interaction: { mode: "nearest", intersect: false },
+            scales: {
+              x: { type: "time", time: { unit: "minute" } },
+              y: { title: { display: true, text: "Total" } }
+            },
+            plugins: {
+              legend: { position: "bottom" },
+              tooltip: { enabled: true }
+            }
+          }
+        })
+      } else {
+        state.chart.data.datasets = datasets
+        state.chart.update()
+      }
+    }
+
+    async function fetchAll() {
+      const live = document.getElementById("liveToggle").checked
+      const bookmaker = document.getElementById("bookmaker").value
+      const banner = document.getElementById("error")
+      banner.style.display = "none"
+      try {
+        const [oddsRes, scoresRes] = await Promise.all([
+          fetch(`/api/odds?live=${live ? "true" : "false"}&bookmaker=${encodeURIComponent(bookmaker)}`),
+          fetch(`/api/scores`)
+        ])
+        if (!oddsRes.ok) throw new Error(await oddsRes.text() || `HTTP ${oddsRes.status}`)
+        if (!scoresRes.ok) throw new Error(await scoresRes.text() || `HTTP ${scoresRes.status}`)
+        const rows = await oddsRes.json()
+        const scores = await scoresRes.json()
+        state.lastRows = rows
+        state.scoreMap = new Map(scores.map(s => [`${(s.away_team||'').toLowerCase()}__${(s.home_team||'').toLowerCase()}`, s]))
+        upsertHistory(rows, state.scoreMap)
+        renderTable(rows)
+        renderChart()
+        document.getElementById("lastFetch").textContent = `Last refresh ${new Date().toLocaleTimeString()}`
+      } catch (e) {
+        banner.textContent = `Error: ${e.message.slice(0, 200)}`
+        banner.style.display = "block"
+      }
+    }
+
+    document.getElementById("refresh").addEventListener("click", fetchAll)
+    for (const id of ["search","todayOnly","gapThres","showLive","showProj"]) {
+      document.getElementById(id).addEventListener("input", () => { renderTable(state.lastRows); renderChart() })
+      document.getElementById(id).addEventListener("change", () => { renderTable(state.lastRows); renderChart() })
+    }
+    document.getElementById("liveToggle").addEventListener("change", fetchAll)
+
+    fetchAll()
+    setInterval(fetchAll, REFRESH_MS)
+  </script>
+</body>
+</html>
