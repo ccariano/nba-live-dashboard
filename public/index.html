@@ -28,7 +28,7 @@
   <h1>NBA Live Totals Dashboard</h1>
 
   <div class="controls">
-    <label><input type="checkbox" id="liveToggle" checked> Live</label>
+    <label><input type="checkbox" id="liveToggle" checked disabled> Live</label>
     <label><input type="checkbox" id="todayOnly" checked> Today only</label>
     <select id="bookmaker">
       <option value="draftkings" selected>DraftKings</option>
@@ -73,7 +73,7 @@
   </div>
 
   <script>
-    const REFRESH_MS = 10000
+    const REFRESH_MS = 60000
     const MAX_POINTS = 300
 
     const state = {
