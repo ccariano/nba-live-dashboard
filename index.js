@@ -12,12 +12,25 @@ app.use(express.static("public"))
 
 let cache = { odds: null, oddsTs: 0, scores: null, scoresTs: 0, live: true, bookmaker: "draftkings" }
 const CACHE_MS = 60_000
+
 // --- Game hour window control ---
 function inGameWindow() {
   const now = new Date()
-  const hourET = now.getUTCHours() - 4 // adjust for Eastern Time (UTC-4)
-  // Game window: 7 PM to 11 PM ET
-  return hourET >= 19 || hourET < 23
+  const hourET = Number(
+    new Intl.DateTimeFormat("en-US", { hour: "2-digit", hour12: false, timeZone: "America/New_York" })
+      .format(now)
+  )
+  // 7 PM to 1 AM ET
+  return hourET >= 19 || hourET < 1
+}
+
+// --- Filter for today's games only (Eastern Time) ---
+function isTodayET(iso) {
+  if (!iso) return false
+  const d = new Date(iso)
+  const fmt = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" })
+  const [mdyNow, mdyGame] = [fmt.format(new Date()), fmt.format(d)]
+  return mdyNow === mdyGame
 }
 
 
@@ -99,55 +112,71 @@ function parsePeriodClock(status) {
 }
 
 app.get("/api/scores", async (req, res) => {
-  try {
-    const now = Date.now()
-    if (cache.scores && now - cache.scoresTs < CACHE_MS) {
-      return res.json(cache.scores)
-    }
-    const base = "https://api.the-odds-api.com/v4/sports/basketball_nba/scores"
-    const url = new URL(base)
-    url.searchParams.set("daysFrom", "0")
-    url.searchParams.set("apiKey", ODDS_API_KEY)
-    const r = await fetch(url, { headers: { "accept": "application/json" } })
-    const status = r.status
-    const text = await r.text()
-    if (status !== 200) {
-      return res.status(status).json({ error: "Upstream error", status, detail: text.slice(0, 500) })
-    }
-    const raw = JSON.parse(text)
-    const mapped = raw.map(g => {
-      const homeName = g.home_team || (g.teams && g.teams.home) || null
-      const awayName = g.away_team || (g.teams && g.teams.away) || null
-      let home_score = null, away_score = null
-      if (Array.isArray(g.scores)) {
-        for (const s of g.scores) {
-          if (!s) continue
-          if (s.name && homeName && s.name.toLowerCase().includes(homeName.toLowerCase())) home_score = Number(s.score)
-          if (s.name && awayName && s.name.toLowerCase().includes(awayName.toLowerCase())) away_score = Number(s.score)
-        }
-      }
-      if (home_score === null && typeof g.home_score !== "undefined") home_score = Number(g.home_score)
-      if (away_score === null && typeof g.away_score !== "undefined") away_score = Number(g.away_score)
-      const statusStr = g.time || g.status || ""
-      const pc = parsePeriodClock(statusStr)
-      return {
-        id: g.id || g.event_id || null,
-        commence_time: g.commence_time || g.commenceTime || null,
-        completed: !!g.completed,
-        status: statusStr || null,
-        home_team: homeName,
-        away_team: awayName,
-        home_score,
-        away_score,
-        period: pc.period,
-        clock: pc.clock
-      }
-    })
-    cache = { ...cache, scores: mapped, scoresTs: now }
-    res.json(mapped)
-  } catch (err) {
-    res.status(500).json({ error: "Server error", detail: String(err).slice(0, 500) })
+try {
+const now = Date.now()
+if (cache.scores && now - cache.scoresTs < CACHE_MS) {
+return res.json(cache.scores)
+}
+
+const base = "https://api.the-odds-api.com/v4/sports/basketball_nba/scores"
+const url = new URL(base)
+url.searchParams.set("daysFrom", "1")
+url.searchParams.set("apiKey", ODDS_API_KEY)
+
+const r = await fetch(url, { headers: { accept: "application/json" } })
+const status = r.status
+const text = await r.text()
+if (status !== 200) {
+  if (cache.scores) {
+    console.log("Scores upstream error", status, text.slice(0, 120), "serving cache")
+    return res.json(cache.scores)
   }
+  return res.status(status).json({ error: "Upstream error", status, detail: text.slice(0, 500) })
+}
+
+const raw = JSON.parse(text)
+const mapped = raw.map(g => {
+  const homeName = g.home_team || (g.teams && g.teams.home) || null
+  const awayName = g.away_team || (g.teams && g.teams.away) || null
+  let home_score = null
+  let away_score = null
+  if (Array.isArray(g.scores)) {
+    for (const s of g.scores) {
+      if (!s) continue
+      if (s.name && homeName && s.name.toLowerCase().includes(homeName.toLowerCase())) home_score = Number(s.score)
+      if (s.name && awayName && s.name.toLowerCase().includes(awayName.toLowerCase())) away_score = Number(s.score)
+    }
+  }
+  if (home_score === null && typeof g.home_score !== "undefined") home_score = Number(g.home_score)
+  if (away_score === null && typeof g.away_score !== "undefined") away_score = Number(g.away_score)
+  const statusStr = g.time || g.status || ""
+  const pc = parsePeriodClock(statusStr)
+  return {
+    id: g.id || g.event_id || null,
+    commence_time: g.commence_time || g.commenceTime || null,
+    completed: !!g.completed,
+    status: statusStr || null,
+    home_team: homeName,
+    away_team: awayName,
+    home_score,
+    away_score,
+    period: pc.period,
+    clock: pc.clock
+  }
+})
+
+const todayOnly = mapped.filter(g => isTodayET(g.commence_time))
+cache = { ...cache, scores: todayOnly, scoresTs: now }
+return res.json(todayOnly)
+
+
+} catch (err) {
+if (cache.scores) {
+console.log("Scores handler error serving cache", String(err).slice(0, 120))
+return res.json(cache.scores)
+}
+return res.status(500).json({ error: "Server error", detail: String(err).slice(0, 500) })
+}
 })
 
 app.listen(PORT, () => {
