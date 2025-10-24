@@ -11,11 +11,11 @@ if (!ODDS_API_KEY) {
 app.use(express.static("public"))
 
 let cache = { odds: null, oddsTs: 0, scores: null, scoresTs: 0, live: true, bookmaker: "draftkings" }
-const CACHE_MS = 10_000
+const CACHE_MS = 120_000
 
 app.get("/api/odds", async (req, res) => {
   try {
-    const live = req.query.live !== "false"
+    const live = true
     const bookmaker = req.query.bookmaker || "draftkings"
     const now = Date.now()
 
@@ -89,7 +89,7 @@ app.get("/api/scores", async (req, res) => {
     }
     const base = "https://api.the-odds-api.com/v4/sports/basketball_nba/scores"
     const url = new URL(base)
-    url.searchParams.set("daysFrom", "1")
+    url.searchParams.set("daysFrom", "0")
     url.searchParams.set("apiKey", ODDS_API_KEY)
     const r = await fetch(url, { headers: { "accept": "application/json" } })
     const status = r.status
