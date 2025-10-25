@@ -290,6 +290,18 @@ app.get("/api/history", (req, res) => {
   res.json(out)
 })
 
+// ESPN DEBUG
+app.get("/api/espn_debug", async (req, res) => {
+  try {
+    const map = await getEspnClockMap()
+    const sample = Array.from(map.entries()).slice(0, 8).map(([k, v]) => ({ k, v }))
+    res.json({ ok: true, size: map.size, sample })
+  } catch (e) {
+    res.json({ ok: false, error: String(e).slice(0, 200) })
+  }
+})
+
+
 app.listen(PORT, () => {
   console.log(`Server on http://localhost:${PORT}`)
 })
