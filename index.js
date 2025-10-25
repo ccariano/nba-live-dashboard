@@ -30,11 +30,10 @@ const cache = {
   windowUsed: false
 }
 
-const history = new Map()  // game_id -> [{ ts, y }]
+const history = new Map()
 
 app.use(express.static(path.join(__dirname, "public")))
 
-// ---------- helpers ----------
 function withinWindow() {
   const now = Date.now()
   if (!cache.windowStart || now - cache.windowStart > WINDOW_MS) {
@@ -66,19 +65,42 @@ function extractTeamTotals(g) {
   return { home_score: home, away_score: away }
 }
 
-// ---------- ESPN period/clock ----------
+// ESPN helper that tries multiple URLs
 async function getEspnClockMap() {
   const now = Date.now()
   if (cache.espn && now - cache.espnTs < CACHE_MS) return cache.espn
 
-  const url = "https://site.api.espn.com/apis/v2/sports/basketball/nba/scoreboard"
-  const r = await fetch(url)
-  if (!r.ok) throw new Error(`ESPN ${r.status}`)
-  const json = await r.json()
+  const d = new Date()
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, "0")
+  const day = String(d.getDate()).padStart(2, "0")
+  const ymd = `${y}${m}${day}`
 
-  // Build map: "away__home" -> { period, clock }
+  const candidates = [
+    `https://site.web.api.espn.com/apis/v2/sports/basketball/nba/scoreboard?dates=${ymd}`,
+    `https://site.api.espn.com/apis/v2/sports/basketball/nba/scoreboard?dates=${ymd}`,
+    `https://site.web.api.espn.com/apis/v2/sports/basketball/nba/scoreboard`,
+    `https://site.api.espn.com/apis/v2/sports/basketball/nba/scoreboard`
+  ]
+
+  let json = null
+  let lastErr = ""
+
+  for (const url of candidates) {
+    try {
+      const r = await fetch(url)
+      if (!r.ok) { lastErr = `ESPN ${r.status}`; continue }
+      json = await r.json()
+      if (json && Array.isArray(json.events)) break
+    } catch (e) {
+      lastErr = String(e)
+    }
+  }
+
+  if (!json || !Array.isArray(json.events)) throw new Error(lastErr || "ESPN unknown")
+
   const out = new Map()
-  const events = Array.isArray(json?.events) ? json.events : []
+  const events = json.events
   for (const ev of events) {
     const comp = Array.isArray(ev?.competitions) ? ev.competitions[0] : null
     if (!comp) continue
@@ -89,19 +111,21 @@ async function getEspnClockMap() {
     const awayName = normTeam(awayObj?.team?.name || awayObj?.team?.displayName)
 
     const status = comp.status || ev.status || {}
-    const period = Number(status.period)
-    const clock = String(status.displayClock || "")
+    const periodNum = Number(status.period)
+    const clockStr = String(status.displayClock || "")
     const state = String(status.type?.state || "").toLowerCase()
 
-    // Only trust if in progress or halftime or final
-    const valid = state === "in" || state === "post" || /half/i.test(clock) || /final/i.test(clock)
-    if (!homeName || !awayName || !valid) continue
+    let per = Number.isFinite(periodNum) ? periodNum : null
+    let clk = clockStr || null
 
-    // Normalize halftime and final to our format
-    let per = period || null
-    let clk = clock || null
-    if (/half/i.test(clock)) { per = 3; clk = "12:00" }
-    if (/final/i.test(clock) || state === "post") { per = 4; clk = "0:00" }
+    if (/half/i.test(clockStr)) { per = 3; clk = "12:00" }
+    if (/final/i.test(clockStr) || state === "post") { per = 4; clk = "0:00" }
+
+    if (!homeName || !awayName) continue
+
+    // Only keep if in progress, halftime, or finished
+    const valid = state === "in" || state === "post" || per != null
+    if (!valid) continue
 
     out.set(`${awayName}__${homeName}`, { period: per, clock: clk })
   }
@@ -111,7 +135,7 @@ async function getEspnClockMap() {
   return out
 }
 
-// ---------- ODDS (totals) ----------
+// ODDS
 app.get("/api/odds", async (req, res) => {
   try {
     const live = req.query.live === "false" ? false : true
@@ -183,7 +207,7 @@ app.get("/api/odds", async (req, res) => {
   }
 })
 
-// ---------- SCORES (merge OddsAPI totals with ESPN period/clock) ----------
+// SCORES
 app.get("/api/scores", async (req, res) => {
   try {
     const now = Date.now()
@@ -191,7 +215,6 @@ app.get("/api/scores", async (req, res) => {
       return res.json(cache.scores)
     }
 
-    // Base scores and team totals from The Odds API
     const url = new URL("https://api.the-odds-api.com/v4/sports/basketball_nba/scores")
     url.searchParams.set("dateFormat", "iso")
     url.searchParams.set("apiKey", ODDS_API_KEY)
@@ -202,7 +225,6 @@ app.get("/api/scores", async (req, res) => {
     }
     const data = await r.json()
 
-    // Period and clock from ESPN
     const espnMap = await getEspnClockMap()
 
     const out = (data || []).map(g => {
@@ -239,7 +261,7 @@ app.get("/api/scores", async (req, res) => {
   }
 })
 
-// ---------- HISTORY (today only) ----------
+// HISTORY
 app.get("/api/history", (req, res) => {
   const out = {}
   const today = new Date()
