@@ -111,42 +111,6 @@ async function getEspnClockMap() {
   return out
 }
 
-  if (!json || !Array.isArray(json.events)) throw new Error(lastErr || "ESPN unknown")
-
-  const out = new Map()
-  const events = json.events
-  for (const ev of events) {
-    const comp = Array.isArray(ev?.competitions) ? ev.competitions[0] : null
-    if (!comp) continue
-    const comps = Array.isArray(comp.competitors) ? comp.competitors : []
-    const homeObj = comps.find(c => c.homeAway === "home")
-    const awayObj = comps.find(c => c.homeAway === "away")
-    const homeName = normTeam(homeObj?.team?.name || homeObj?.team?.displayName)
-    const awayName = normTeam(awayObj?.team?.name || awayObj?.team?.displayName)
-
-    const status = comp.status || ev.status || {}
-    const periodNum = Number(status.period)
-    const clockStr = String(status.displayClock || "")
-    const state = String(status.type?.state || "").toLowerCase()
-
-    let per = Number.isFinite(periodNum) ? periodNum : null
-    let clk = clockStr || null
-
-    if (/half/i.test(clockStr)) { per = 3; clk = "12:00" }
-    if (/final/i.test(clockStr) || state === "post") { per = 4; clk = "0:00" }
-
-    if (!homeName || !awayName) continue
-
-    // Only keep if in progress, halftime, or finished
-    const valid = state === "in" || state === "post" || per != null
-    if (!valid) continue
-
-    out.set(`${awayName}__${homeName}`, { period: per, clock: clk })
-  }
-
-  cache.espn = out
-  cache.espnTs = now
-
 // ODDS
 app.get("/api/odds", async (req, res) => {
   try {
