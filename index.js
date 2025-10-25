@@ -71,20 +71,30 @@ async function getEspnClockMap() {
   if (cache.espn && now - cache.espnTs < CACHE_MS) return cache.espn
 
   const url = "https://site.web.api.espn.com/apis/v2/sports/basketball/nba/scoreboard"
-  let json
+  let json = null
+  let errNote = ""
+
   try {
     const r = await fetch(url)
-    if (!r.ok) throw new Error(`ESPN status ${r.status}`)
-    json = await r.json()
-  } catch (err) {
-    console.error("ESPN fetch failed", err)
+    if (!r.ok) {
+      errNote = `ESPN status ${r.status}`
+    } else {
+      json = await r.json()
+    }
+  } catch (e) {
+    errNote = String(e)
+  }
+
+  // If ESPN failed, cache an empty Map so we do not crash
+  if (!json || !Array.isArray(json.events)) {
+    console.error("ESPN scoreboard fetch failed", errNote || "no events array")
     cache.espn = new Map()
     cache.espnTs = now
     return cache.espn
   }
 
   const out = new Map()
-  const events = Array.isArray(json?.events) ? json.events : []
+  const events = json.events
   for (const ev of events) {
     const comp = ev?.competitions?.[0]
     const homeObj = comp?.competitors?.find(c => c.homeAway === "home")
@@ -92,21 +102,22 @@ async function getEspnClockMap() {
 
     const home = normTeam(homeObj?.team?.shortDisplayName || homeObj?.team?.displayName)
     const away = normTeam(awayObj?.team?.shortDisplayName || awayObj?.team?.displayName)
-
-    const status = comp?.status || {}
-    const period = Number(status?.period) || null
-    const clock = String(status?.displayClock || "").trim() || null
-    const state = (status?.type?.state || "").toLowerCase()
-
     if (!home || !away) continue
 
-    let per = period
-    let clk = clock
-    if (/half/i.test(clock)) { per = 3; clk = "12:00" }
-    if (/final/i.test(clock) || state === "post") { per = 4; clk = "0:00" }
+    const status = comp?.status || {}
+    const periodRaw = Number(status?.period)
+    const clockRaw = String(status?.displayClock || "").trim()
+    const state = String(status?.type?.state || "").toLowerCase()
 
-    const valid = ["in", "post"].includes(state) || per != null
-    if (valid) out.set(`${away}__${home}`, { period: per, clock: clk })
+    let period = Number.isFinite(periodRaw) ? periodRaw : null
+    let clock = clockRaw || null
+    if (/half/i.test(clockRaw)) { period = 3; clock = "12:00" }
+    if (/final/i.test(clockRaw) || state === "post") { period = 4; clock = "0:00" }
+
+    const valid = ["in", "post"].includes(state) || period != null
+    if (!valid) continue
+
+    out.set(`${away}__${home}`, { period, clock })
   }
 
   cache.espn = out
