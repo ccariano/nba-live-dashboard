@@ -149,7 +149,6 @@ async function getEspnClockMap() {
 
   cache.espn = out
   cache.espnTs = now
-  return out
 }
 
 // ODDS
