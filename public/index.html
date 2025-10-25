@@ -4,25 +4,24 @@
   <meta charset="utf-8">
   <title>NBA Live Totals</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="preconnect" href="https://cdn.jsdelivr.net">
   <style>
-    body { background:#0f1115; color:#eaeef4; font:14px system-ui, -apple-system, Segoe UI, Roboto; margin:0; }
-    header { display:flex; gap:12px; align-items:center; padding:12px 16px; border-bottom:1px solid #222; }
-    input, select, button { background:#161a22; color:#eaeef4; border:1px solid #2a2f3a; border-radius:6px; padding:6px 8px; }
-    button { cursor:pointer; }
+    body { background:#0f1115; color:#eaeef4; font:14px system-ui,-apple-system,Segoe UI,Roboto; margin:0 }
+    header { display:flex; gap:12px; align-items:center; padding:12px 16px; border-bottom:1px solid #222 }
+    input, select, button { background:#161a22; color:#eaeef4; border:1px solid #2a2f3a; border-radius:6px; padding:6px 8px }
+    button { cursor:pointer }
     #lastFetch { opacity:.7 }
-    main { padding:12px 16px; }
-    table { width:100%; border-collapse:collapse; font-size:13px; }
-    th, td { padding:8px 10px; border-bottom:1px solid #1c2030; text-align:left; white-space:nowrap; }
-    thead th { position:sticky; top:0; background:#111419; z-index:1; }
-    tr:hover { background:#121622; }
-    tr.selected { outline:2px solid #2a7cf7; }
-    .hi { color:#18c26e; font-weight:600; }
-    .lo { color:#ff6b6b; font-weight:600; }
-    #chartWrap { height:340px; margin-top:12px; background:#0d1016; border:1px solid #1c2030; border-radius:8px; padding:8px; }
-    #error { display:none; margin:8px 0; padding:8px; border:1px solid #a33; background:#2a1111; color:#f7c6c6; }
+    main { padding:12px 16px }
+    table { width:100%; border-collapse:collapse; font-size:13px }
+    th, td { padding:8px 10px; border-bottom:1px solid #1c2030; text-align:left; white-space:nowrap }
+    thead th { position:sticky; top:0; background:#111419; z-index:1 }
+    tr:hover { background:#121622 }
+    tr.selected { outline:2px solid #2a7cf7 }
+    .hi { color:#18c26e; font-weight:600 }
+    .lo { color:#ff6b6b; font-weight:600 }
+    #chartWrap { height:340px; margin-top:12px; background:#0d1016; border:1px solid #1c2030; border-radius:8px; padding:8px }
+    #error { display:none; margin:8px 0; padding:8px; border:1px solid #a33; background:#2a1111; color:#f7c6c6 }
     .spacer { flex:1 }
-    label.chk { display:inline-flex; gap:6px; align-items:center; }
+    label.chk { display:inline-flex; gap:6px; align-items:center }
   </style>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/luxon@3/build/global/luxon.min.js"></script>
@@ -37,13 +36,13 @@
       <option value="fanduel">FanDuel</option>
       <option value="caesars">Caesars</option>
     </select>
-    <input id="search" placeholder="Filter by team name" />
+    <input id="search" placeholder="Filter by team name">
     <button id="refresh">Refresh now</button>
     <div id="lastFetch"></div>
     <div class="spacer"></div>
     <label class="chk"><input type="checkbox" id="showLive" checked> Show Live Total</label>
     <label class="chk"><input type="checkbox" id="showProj" checked> Show Projection</label>
-    <input id="gapThres" type="number" value="5" style="width:64px" title="Alert gap ≥" />
+    <input id="gapThres" type="number" value="5" style="width:64px" title="Alert gap ≥">
   </header>
 
   <main>
@@ -333,6 +332,19 @@
     }
   }
 
+  async function seedHistory() {
+    try {
+      const r = await fetch("/api/history")
+      if (!r.ok) return
+      const h = await r.json()
+      for (const [id, points] of Object.entries(h)) {
+        if (!state.history.has(id)) state.history.set(id, { label: "", live: [], proj: [], score: [] })
+        const serie = state.history.get(id)
+        serie.live = points.map(p => ({ x: p.ts, y: p.y }))
+      }
+    } catch {}
+  }
+
   async function fetchAll() {
     const live = document.getElementById("liveToggle").checked
     const bookmaker = document.getElementById("bookmaker").value
@@ -351,6 +363,12 @@
       state.scoreMap = new Map(
         scores.map(s => [`${(s.away_team||'').toLowerCase()}__${(s.home_team||'').toLowerCase()}`, s])
       )
+      // label refresh and projections update
+      for (const r of rows) {
+        const key = r.id
+        if (!state.history.has(key)) state.history.set(key, { label: "", live: [], proj: [], score: [] })
+        state.history.get(key).label = `${r.away_team} @ ${r.home_team}`
+      }
       upsertHistory(rows, state.scoreMap)
       renderTable(rows)
       renderChart()
@@ -370,8 +388,11 @@
   }
   document.getElementById("liveToggle").addEventListener("change", fetchAll)
 
-  fetchAll()
-  setInterval(fetchAll, REFRESH_MS)
+  ;(async () => {
+    await seedHistory()
+    await fetchAll()
+    setInterval(fetchAll, REFRESH_MS)
+  })()
 </script>
 </body>
 </html>
