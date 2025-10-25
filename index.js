@@ -247,6 +247,47 @@ app.get("/api/history", (req, res) => {
   res.json(out)
 })
 
+app.get("/api/scores_debug", async (req, res) => {
+  try {
+    const url = new URL("https://api.the-odds-api.com/v4/sports/basketball_nba/scores")
+    url.searchParams.set("dateFormat", "iso")
+    url.searchParams.set("apiKey", process.env.ODDS_API_KEY || "")
+
+    const r = await fetch(url.toString())
+    const text = await r.text()
+
+    // Try to parse JSON. If it fails, return the raw text so we see errors.
+    let data = null
+    try { data = JSON.parse(text) } catch (_) {}
+
+    if (!data || !Array.isArray(data)) {
+      return res.json({ ok: false, note: "non-JSON or error", raw: text.slice(0, 2000) })
+    }
+
+    // Build a compact view so you can share it safely
+    const sample = data.slice(0, 3).map(g => ({
+      id: g.id,
+      home_team: g.home_team,
+      away_team: g.away_team,
+      home_score: g.home_score,
+      away_score: g.away_score,
+      time: g.time,
+      completed: g.completed,
+      commence_time: g.commence_time,
+      scores_sample: Array.isArray(g.scores) ? g.scores.slice(0, 4) : null
+    }))
+
+    res.json({
+      ok: true,
+      count: data.length,
+      sample
+    })
+  } catch (e) {
+    res.json({ ok: false, error: String(e).slice(0, 500) })
+  }
+})
+
+
 app.listen(PORT, () => {
   console.log(`Server on http://localhost:${PORT}`)
 })
