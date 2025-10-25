@@ -112,6 +112,78 @@ app.get("/api/odds", async (req, res) => {
   }
 })
 
+// ----------- helpers for SCORES -----------
+function extractTeamScores(g) {
+  // Prefer explicit fields if present
+  let away = Number.isFinite(Number(g.away_score)) ? Number(g.away_score) : null
+  let home = Number.isFinite(Number(g.home_score)) ? Number(g.home_score) : null
+
+  // Fallback: parse "58-52" style strings from scores[]
+  if ((away == null || home == null) && Array.isArray(g.scores)) {
+    for (let i = g.scores.length - 1; i >= 0; i--) {
+      const s = g.scores[i]?.score
+      if (typeof s === "string") {
+        const m = s.match(/^\s*(\d+)\s*-\s*(\d+)\s*$/)
+        if (m) {
+          // API lists as away-home in practice
+          away = Number(m[1])
+          home = Number(m[2])
+          break
+        }
+      }
+    }
+  }
+  return { away_score: away, home_score: home }
+}
+
+function parsePeriodClock(row) {
+  let period = null
+  let clock = null
+  const t = String(row.time || "")
+  const tl = t.toLowerCase()
+
+  // Q1 08:23, Q2 01:05
+  const m = /q\s*([1-9])\s+(\d{1,2}):(\d{2})/i.exec(t)
+  if (m) {
+    period = Number(m[1])
+    clock = `${m[2]}:${m[3]}`
+    return { period, clock }
+  }
+
+  // Halftime variants
+  if (/half.?time/.test(tl)) {
+    period = 3
+    clock = "12:00"
+    return { period, clock }
+  }
+
+  // Final
+  if (/final/.test(tl)) {
+    period = 4
+    clock = "0:00"
+    return { period, clock }
+  }
+
+  // End of Qx -> next period start approximation
+  const endQ = /end\s+of\s+q(?:uarter)?\s*([1-4])/i.exec(t)
+  if (endQ) {
+    const q = Number(endQ[1])
+    period = Math.min(q + 1, 4)
+    clock = period === 3 ? "12:00" : "12:00"
+    return { period, clock }
+  }
+
+  // Fallback: infer from how many quarters have scores
+  if (Array.isArray(row.scores)) {
+    const hasQuarterName = s => /1st|2nd|3rd|4th/i.test(s?.name || "")
+    const qDone = row.scores.filter(s => hasQuarterName(s) && s.score != null).length
+    if (row.completed) { period = 4; clock = "0:00" }
+    else if (qDone > 0) { period = Math.min(qDone + 1, 4); clock = null }
+  }
+
+  return { period, clock }
+}
+
 // ----------- SCORES (live + upcoming only) -----------
 app.get("/api/scores", async (req, res) => {
   try {
@@ -121,7 +193,7 @@ app.get("/api/scores", async (req, res) => {
     }
 
     const url = new URL("https://api.the-odds-api.com/v4/sports/basketball_nba/scores")
-    // no daysFrom here: returns live + upcoming
+    // no daysFrom here: live + upcoming
     url.searchParams.set("dateFormat", "iso")
     url.searchParams.set("apiKey", ODDS_API_KEY)
 
@@ -132,36 +204,8 @@ app.get("/api/scores", async (req, res) => {
     }
     const data = await r.json()
 
-    function parsePeriodClock(row) {
-      let period = null
-      let clock = null
-      if (row.time && typeof row.time === "string") {
-        const m = /Q([1-9])\s+(\d{1,2}):(\d{2})/i.exec(row.time)
-        if (m) {
-          period = Number(m[1])
-          clock = `${m[2]}:${m[3]}`
-        } else if (/halftime/i.test(row.time)) {
-          period = 3
-          clock = "12:00"
-        } else if (/final/i.test(row.time)) {
-          period = 4
-          clock = "0:00"
-        }
-      }
-      if (!period && Array.isArray(row.scores)) {
-        const qNames = new Set(["1st Quarter", "2nd Quarter", "3rd Quarter", "4th Quarter"])
-        const qDone = row.scores.filter(s => qNames.has(s.name) && s.score != null).length
-        if (row.completed) { period = 4; clock = "0:00" }
-        else { period = Math.min(qDone + 1, 4) || null; clock = null }
-      }
-      return { period, clock }
-    }
-
     const out = (data || []).map(g => {
-      const homeTotal = Number(g.home_score ?? 0)
-      const awayTotal = Number(g.away_score ?? 0)
-      let home_score = Number.isFinite(homeTotal) && homeTotal >= 0 ? homeTotal : null
-      let away_score = Number.isFinite(awayTotal) && awayTotal >= 0 ? awayTotal : null
+      const { away_score, home_score } = extractTeamScores(g)
 
       const commenceMs = g.commence_time ? new Date(g.commence_time).getTime() : null
       const nowMs = Date.now()
@@ -169,18 +213,14 @@ app.get("/api/scores", async (req, res) => {
 
       const { period, clock } = parsePeriodClock(g)
 
-      // If game hasn't started yet, force period/clock null so UI shows n/a and no projection
-      const periodOut = beforeTip ? null : period
-      const clockOut = beforeTip ? null : clock
-
       return {
         id: g.id,
         home_team: g.home_team,
         away_team: g.away_team,
-        home_score,
-        away_score,
-        period: periodOut,
-        clock: clockOut,
+        home_score: beforeTip ? null : home_score,
+        away_score: beforeTip ? null : away_score,
+        period: beforeTip ? null : period,
+        clock: beforeTip ? null : clock,
         completed: !!g.completed
       }
     })
