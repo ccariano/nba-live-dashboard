@@ -70,32 +70,49 @@ async function getEspnClockMap() {
   const now = Date.now()
   if (cache.espn && now - cache.espnTs < CACHE_MS) return cache.espn
 
-  const d = new Date()
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, "0")
-  const day = String(d.getDate()).padStart(2, "0")
-  const ymd = `${y}${m}${day}`
-
-  const candidates = [
-    `https://site.web.api.espn.com/apis/v2/sports/basketball/nba/scoreboard?dates=${ymd}`,
-    `https://site.api.espn.com/apis/v2/sports/basketball/nba/scoreboard?dates=${ymd}`,
-    `https://site.web.api.espn.com/apis/v2/sports/basketball/nba/scoreboard`,
-    `https://site.api.espn.com/apis/v2/sports/basketball/nba/scoreboard`
-  ]
-
-  let json = null
-  let lastErr = ""
-
-  for (const url of candidates) {
-    try {
-      const r = await fetch(url)
-      if (!r.ok) { lastErr = `ESPN ${r.status}`; continue }
-      json = await r.json()
-      if (json && Array.isArray(json.events)) break
-    } catch (e) {
-      lastErr = String(e)
-    }
+  const url = "https://site.web.api.espn.com/apis/v2/sports/basketball/nba/scoreboard"
+  let json
+  try {
+    const r = await fetch(url)
+    if (!r.ok) throw new Error(`ESPN status ${r.status}`)
+    json = await r.json()
+  } catch (err) {
+    console.error("ESPN fetch failed", err)
+    cache.espn = new Map()
+    cache.espnTs = now
+    return cache.espn
   }
+
+  const out = new Map()
+  const events = Array.isArray(json?.events) ? json.events : []
+  for (const ev of events) {
+    const comp = ev?.competitions?.[0]
+    const homeObj = comp?.competitors?.find(c => c.homeAway === "home")
+    const awayObj = comp?.competitors?.find(c => c.homeAway === "away")
+
+    const home = normTeam(homeObj?.team?.shortDisplayName || homeObj?.team?.displayName)
+    const away = normTeam(awayObj?.team?.shortDisplayName || awayObj?.team?.displayName)
+
+    const status = comp?.status || {}
+    const period = Number(status?.period) || null
+    const clock = String(status?.displayClock || "").trim() || null
+    const state = (status?.type?.state || "").toLowerCase()
+
+    if (!home || !away) continue
+
+    let per = period
+    let clk = clock
+    if (/half/i.test(clock)) { per = 3; clk = "12:00" }
+    if (/final/i.test(clock) || state === "post") { per = 4; clk = "0:00" }
+
+    const valid = ["in", "post"].includes(state) || per != null
+    if (valid) out.set(`${away}__${home}`, { period: per, clock: clk })
+  }
+
+  cache.espn = out
+  cache.espnTs = now
+  return out
+}
 
   if (!json || !Array.isArray(json.events)) throw new Error(lastErr || "ESPN unknown")
 
