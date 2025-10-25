@@ -8,11 +8,9 @@ const __dirname = path.dirname(__filename)
 
 const app = express()
 
-// config
 const ODDS_API_KEY = process.env.ODDS_API_KEY || ""
 const PORT = process.env.PORT || 3000
 
-// cache + request window
 const CACHE_MS = 30000
 const WINDOW_MS = 45000
 
@@ -27,9 +25,11 @@ const cache = {
   windowUsed: false
 }
 
+// in memory line history for today
+const history = new Map() // game_id -> [{ ts, y }]
+
 app.use(express.static(path.join(__dirname, "public")))
 
-// throttle helper
 function withinWindow() {
   const now = Date.now()
   if (!cache.windowStart || now - cache.windowStart > WINDOW_MS) {
@@ -39,7 +39,6 @@ function withinWindow() {
   return { now, used: cache.windowUsed }
 }
 
-// odds route
 app.get("/api/odds", async (req, res) => {
   try {
     const live = req.query.live === "false" ? false : true
@@ -92,6 +91,17 @@ app.get("/api/odds", async (req, res) => {
       }
     })
 
+    // append to in memory history
+    for (const g of rows) {
+      if (typeof g.total_point === "number" && g.commence_time) {
+        const ts = Date.now()
+        if (!history.has(g.id)) history.set(g.id, [])
+        const arr = history.get(g.id)
+        arr.push({ ts, y: g.total_point })
+        if (arr.length > 2000) arr.shift()
+      }
+    }
+
     cache.odds = rows
     cache.oddsTs = now
     cache.live = live
@@ -104,7 +114,7 @@ app.get("/api/odds", async (req, res) => {
   }
 })
 
-// scores route Option A: live and upcoming only
+// live and upcoming only
 app.get("/api/scores", async (req, res) => {
   try {
     const now = Date.now()
@@ -113,7 +123,6 @@ app.get("/api/scores", async (req, res) => {
     }
 
     const url = new URL("https://api.the-odds-api.com/v4/sports/basketball_nba/scores")
-    // no daysFrom here
     url.searchParams.set("dateFormat", "iso")
     url.searchParams.set("apiKey", ODDS_API_KEY)
 
@@ -173,6 +182,22 @@ app.get("/api/scores", async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: "Server error", detail: String(e).slice(0, 200) })
   }
+})
+
+// return todays line history
+app.get("/api/history", (req, res) => {
+  const out = {}
+  const today = new Date()
+  const y = today.getFullYear()
+  const m = today.getMonth()
+  const d = today.getDate()
+  const start = new Date(y, m, d).getTime()
+  const end = start + 24 * 60 * 60 * 1000
+  for (const [gameId, arr] of history.entries()) {
+    const filtered = arr.filter(p => p.ts >= start && p.ts < end)
+    if (filtered.length) out[gameId] = filtered
+  }
+  res.json(out)
 })
 
 app.listen(PORT, () => {
