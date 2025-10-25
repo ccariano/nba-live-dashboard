@@ -1,7 +1,13 @@
 {
-  "name": "nba-live-totals-dashboard",
-  "version": "1.5.2",
+  "name": "nba-live-dashboard",
+  "version": "1.0.0",
+  "private": true,
   "type": "module",
-  "scripts": { "start": "node index.js" },
-  "dependencies": { "express": "^4.19.2" }
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "node-fetch": "^3.3.2"
+  }
 }
