@@ -70,51 +70,38 @@ async function getEspnClockMap() {
   const now = Date.now()
   if (cache.espn && now - cache.espnTs < CACHE_MS) return cache.espn
 
-  const url = "https://site.web.api.espn.com/apis/v2/sports/basketball/nba/scoreboard"
   let json = null
-  let errNote = ""
-
   try {
-    const r = await fetch(url)
-    if (!r.ok) {
-      errNote = `ESPN status ${r.status}`
-    } else {
+    const r = await fetch("https://site.web.api.espn.com/apis/v2/sports/basketball/nba/scoreboard")
+    if (r.ok) {
       json = await r.json()
     }
-  } catch (e) {
-    errNote = String(e)
-  }
-
-  // If ESPN failed, cache an empty Map so we do not crash
-  if (!json || !Array.isArray(json.events)) {
-    console.error("ESPN scoreboard fetch failed", errNote || "no events array")
-    cache.espn = new Map()
-    cache.espnTs = now
-    return cache.espn
+  } catch (_) {
+    // ignore network errors
   }
 
   const out = new Map()
-  const events = json.events
+  const events = Array.isArray(json?.events) ? json.events : []
+
   for (const ev of events) {
     const comp = ev?.competitions?.[0]
     const homeObj = comp?.competitors?.find(c => c.homeAway === "home")
     const awayObj = comp?.competitors?.find(c => c.homeAway === "away")
-
     const home = normTeam(homeObj?.team?.shortDisplayName || homeObj?.team?.displayName)
     const away = normTeam(awayObj?.team?.shortDisplayName || awayObj?.team?.displayName)
     if (!home || !away) continue
 
     const status = comp?.status || {}
+    const state = String(status?.type?.state || "").toLowerCase()
     const periodRaw = Number(status?.period)
     const clockRaw = String(status?.displayClock || "").trim()
-    const state = String(status?.type?.state || "").toLowerCase()
 
     let period = Number.isFinite(periodRaw) ? periodRaw : null
     let clock = clockRaw || null
     if (/half/i.test(clockRaw)) { period = 3; clock = "12:00" }
     if (/final/i.test(clockRaw) || state === "post") { period = 4; clock = "0:00" }
 
-    const valid = ["in", "post"].includes(state) || period != null
+    const valid = state === "in" || state === "post" || period !== null
     if (!valid) continue
 
     out.set(`${away}__${home}`, { period, clock })
