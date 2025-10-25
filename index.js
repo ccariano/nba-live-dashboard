@@ -73,9 +73,7 @@ async function getEspnClockMap() {
   let json = null
   try {
     const r = await fetch("https://site.web.api.espn.com/apis/v2/sports/basketball/nba/scoreboard")
-    if (r.ok) {
-      json = await r.json()
-    }
+    if (r.ok) json = await r.json()
   } catch (_) {
     // ignore network errors
   }
@@ -87,6 +85,7 @@ async function getEspnClockMap() {
     const comp = ev?.competitions?.[0]
     const homeObj = comp?.competitors?.find(c => c.homeAway === "home")
     const awayObj = comp?.competitors?.find(c => c.homeAway === "away")
+
     const home = normTeam(homeObj?.team?.shortDisplayName || homeObj?.team?.displayName)
     const away = normTeam(awayObj?.team?.shortDisplayName || awayObj?.team?.displayName)
     if (!home || !away) continue
@@ -238,7 +237,14 @@ app.get("/api/scores", async (req, res) => {
     }
     const data = await r.json()
 
-    const espnMap = await getEspnClockMap()
+   let espnMap = new Map()
+    try {
+    espnMap = await getEspnClockMap()
+    } catch (e) {
+    console.error("ESPN clock fetch failed", e)
+    espnMap = new Map()
+    }
+
 
     const out = (data || []).map(g => {
       const { home_score, away_score } = extractTeamTotals(g)
