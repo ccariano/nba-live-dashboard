@@ -25,7 +25,7 @@ const cache = {
   windowUsed: false
 }
 
-// in memory line history for today
+// in-memory line history for today
 const history = new Map() // game_id -> [{ ts, y }]
 
 app.use(express.static(path.join(__dirname, "public")))
@@ -39,6 +39,7 @@ function withinWindow() {
   return { now, used: cache.windowUsed }
 }
 
+// ----------- ODDS (totals) -----------
 app.get("/api/odds", async (req, res) => {
   try {
     const live = req.query.live === "false" ? false : true
@@ -53,10 +54,7 @@ app.get("/api/odds", async (req, res) => {
     ) {
       return res.json(cache.odds)
     }
-
-    if (used && cache.odds) {
-      return res.json(cache.odds)
-    }
+    if (used && cache.odds) return res.json(cache.odds)
 
     const url = new URL("https://api.the-odds-api.com/v4/sports/basketball_nba/odds")
     url.searchParams.set("regions", "us")
@@ -91,7 +89,7 @@ app.get("/api/odds", async (req, res) => {
       }
     })
 
-    // append to in memory history
+    // append to in-memory history
     for (const g of rows) {
       if (typeof g.total_point === "number" && g.commence_time) {
         const ts = Date.now()
@@ -114,7 +112,7 @@ app.get("/api/odds", async (req, res) => {
   }
 })
 
-// live and upcoming only
+// ----------- SCORES (live + upcoming only) -----------
 app.get("/api/scores", async (req, res) => {
   try {
     const now = Date.now()
@@ -123,6 +121,7 @@ app.get("/api/scores", async (req, res) => {
     }
 
     const url = new URL("https://api.the-odds-api.com/v4/sports/basketball_nba/scores")
+    // no daysFrom here: returns live + upcoming
     url.searchParams.set("dateFormat", "iso")
     url.searchParams.set("apiKey", ODDS_API_KEY)
 
@@ -161,17 +160,27 @@ app.get("/api/scores", async (req, res) => {
     const out = (data || []).map(g => {
       const homeTotal = Number(g.home_score ?? 0)
       const awayTotal = Number(g.away_score ?? 0)
-      const home_score = Number.isFinite(homeTotal) && homeTotal >= 0 ? homeTotal : null
-      const away_score = Number.isFinite(awayTotal) && awayTotal >= 0 ? awayTotal : null
+      let home_score = Number.isFinite(homeTotal) && homeTotal >= 0 ? homeTotal : null
+      let away_score = Number.isFinite(awayTotal) && awayTotal >= 0 ? awayTotal : null
+
+      const commenceMs = g.commence_time ? new Date(g.commence_time).getTime() : null
+      const nowMs = Date.now()
+      const beforeTip = commenceMs != null && nowMs < commenceMs
+
       const { period, clock } = parsePeriodClock(g)
+
+      // If game hasn't started yet, force period/clock null so UI shows n/a and no projection
+      const periodOut = beforeTip ? null : period
+      const clockOut = beforeTip ? null : clock
+
       return {
         id: g.id,
         home_team: g.home_team,
         away_team: g.away_team,
         home_score,
         away_score,
-        period,
-        clock,
+        period: periodOut,
+        clock: clockOut,
         completed: !!g.completed
       }
     })
@@ -184,13 +193,11 @@ app.get("/api/scores", async (req, res) => {
   }
 })
 
-// return todays line history
+// ----------- HISTORY (today only) -----------
 app.get("/api/history", (req, res) => {
   const out = {}
   const today = new Date()
-  const y = today.getFullYear()
-  const m = today.getMonth()
-  const d = today.getDate()
+  const y = today.getFullYear(), m = today.getMonth(), d = today.getDate()
   const start = new Date(y, m, d).getTime()
   const end = start + 24 * 60 * 60 * 1000
   for (const [gameId, arr] of history.entries()) {
