@@ -149,7 +149,6 @@ async function getEspnClockMap() {
 
   cache.espn = out
   cache.espnTs = now
-}
 
 // ODDS
 app.get("/api/odds", async (req, res) => {
