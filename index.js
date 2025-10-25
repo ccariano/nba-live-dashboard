@@ -19,17 +19,22 @@ const cache = {
   oddsTs: 0,
   live: true,
   bookmaker: "draftkings",
+
   scores: null,
   scoresTs: 0,
+
+  espn: null,
+  espnTs: 0,
+
   windowStart: 0,
   windowUsed: false
 }
 
-// in-memory line history for today
-const history = new Map() // game_id -> [{ ts, y }]
+const history = new Map()  // game_id -> [{ ts, y }]
 
 app.use(express.static(path.join(__dirname, "public")))
 
+// ---------- helpers ----------
 function withinWindow() {
   const now = Date.now()
   if (!cache.windowStart || now - cache.windowStart > WINDOW_MS) {
@@ -39,7 +44,74 @@ function withinWindow() {
   return { now, used: cache.windowUsed }
 }
 
-// ----------- ODDS (totals) -----------
+function normTeam(s) {
+  return String(s || "").toLowerCase().replace(/[^a-z0-9 ]+/g, "").trim()
+}
+
+function extractTeamTotals(g) {
+  let home = null
+  let away = null
+  if (Array.isArray(g.scores)) {
+    const map = new Map()
+    for (const s of g.scores) {
+      const name = normTeam(s?.name)
+      const val = Number(s?.score)
+      if (Number.isFinite(val)) map.set(name, val)
+    }
+    const homeKey = normTeam(g.home_team)
+    const awayKey = normTeam(g.away_team)
+    if (map.has(homeKey)) home = map.get(homeKey)
+    if (map.has(awayKey)) away = map.get(awayKey)
+  }
+  return { home_score: home, away_score: away }
+}
+
+// ---------- ESPN period/clock ----------
+async function getEspnClockMap() {
+  const now = Date.now()
+  if (cache.espn && now - cache.espnTs < CACHE_MS) return cache.espn
+
+  const url = "https://site.api.espn.com/apis/v2/sports/basketball/nba/scoreboard"
+  const r = await fetch(url)
+  if (!r.ok) throw new Error(`ESPN ${r.status}`)
+  const json = await r.json()
+
+  // Build map: "away__home" -> { period, clock }
+  const out = new Map()
+  const events = Array.isArray(json?.events) ? json.events : []
+  for (const ev of events) {
+    const comp = Array.isArray(ev?.competitions) ? ev.competitions[0] : null
+    if (!comp) continue
+    const comps = Array.isArray(comp.competitors) ? comp.competitors : []
+    const homeObj = comps.find(c => c.homeAway === "home")
+    const awayObj = comps.find(c => c.homeAway === "away")
+    const homeName = normTeam(homeObj?.team?.name || homeObj?.team?.displayName)
+    const awayName = normTeam(awayObj?.team?.name || awayObj?.team?.displayName)
+
+    const status = comp.status || ev.status || {}
+    const period = Number(status.period)
+    const clock = String(status.displayClock || "")
+    const state = String(status.type?.state || "").toLowerCase()
+
+    // Only trust if in progress or halftime or final
+    const valid = state === "in" || state === "post" || /half/i.test(clock) || /final/i.test(clock)
+    if (!homeName || !awayName || !valid) continue
+
+    // Normalize halftime and final to our format
+    let per = period || null
+    let clk = clock || null
+    if (/half/i.test(clock)) { per = 3; clk = "12:00" }
+    if (/final/i.test(clock) || state === "post") { per = 4; clk = "0:00" }
+
+    out.set(`${awayName}__${homeName}`, { period: per, clock: clk })
+  }
+
+  cache.espn = out
+  cache.espnTs = now
+  return out
+}
+
+// ---------- ODDS (totals) ----------
 app.get("/api/odds", async (req, res) => {
   try {
     const live = req.query.live === "false" ? false : true
@@ -89,7 +161,6 @@ app.get("/api/odds", async (req, res) => {
       }
     })
 
-    // append to in-memory history
     for (const g of rows) {
       if (typeof g.total_point === "number" && g.commence_time) {
         const ts = Date.now()
@@ -112,26 +183,7 @@ app.get("/api/odds", async (req, res) => {
   }
 })
 
-// ----------- helper to read scores[] by team name -----------
-function extractTeamTotals(g) {
-  let home = null
-  let away = null
-  if (Array.isArray(g.scores)) {
-    const map = new Map()
-    for (const s of g.scores) {
-      const name = String(s?.name || "").toLowerCase()
-      const val = Number(s?.score)
-      if (Number.isFinite(val)) map.set(name, val)
-    }
-    const homeKey = String(g.home_team || "").toLowerCase()
-    const awayKey = String(g.away_team || "").toLowerCase()
-    if (map.has(homeKey)) home = map.get(homeKey)
-    if (map.has(awayKey)) away = map.get(awayKey)
-  }
-  return { home_score: home, away_score: away }
-}
-
-// ----------- SCORES (live + upcoming only) -----------
+// ---------- SCORES (merge OddsAPI totals with ESPN period/clock) ----------
 app.get("/api/scores", async (req, res) => {
   try {
     const now = Date.now()
@@ -139,11 +191,10 @@ app.get("/api/scores", async (req, res) => {
       return res.json(cache.scores)
     }
 
+    // Base scores and team totals from The Odds API
     const url = new URL("https://api.the-odds-api.com/v4/sports/basketball_nba/scores")
-    // no daysFrom here: live + upcoming
     url.searchParams.set("dateFormat", "iso")
     url.searchParams.set("apiKey", ODDS_API_KEY)
-
     const r = await fetch(url.toString())
     if (!r.ok) {
       const detail = await r.text()
@@ -151,14 +202,22 @@ app.get("/api/scores", async (req, res) => {
     }
     const data = await r.json()
 
+    // Period and clock from ESPN
+    const espnMap = await getEspnClockMap()
+
     const out = (data || []).map(g => {
       const { home_score, away_score } = extractTeamTotals(g)
-
       const commenceMs = g.commence_time ? new Date(g.commence_time).getTime() : null
       const beforeTip = commenceMs != null && Date.now() < commenceMs
 
-      // API payload you have does not include period/clock. Leave null.
-      // Projection in the UI will be n/a until we add a time source.
+      let period = null
+      let clock = null
+      const key = `${normTeam(g.away_team)}__${normTeam(g.home_team)}`
+      if (espnMap.has(key)) {
+        const e = espnMap.get(key)
+        period = e.period ?? null
+        clock = e.clock ?? null
+      }
 
       return {
         id: g.id,
@@ -166,8 +225,8 @@ app.get("/api/scores", async (req, res) => {
         away_team: g.away_team,
         home_score: beforeTip ? null : home_score,
         away_score: beforeTip ? null : away_score,
-        period: beforeTip ? null : null,
-        clock: beforeTip ? null : null,
+        period: beforeTip ? null : period,
+        clock: beforeTip ? null : clock,
         completed: !!g.completed
       }
     })
@@ -180,11 +239,13 @@ app.get("/api/scores", async (req, res) => {
   }
 })
 
-// ----------- HISTORY (today only) -----------
+// ---------- HISTORY (today only) ----------
 app.get("/api/history", (req, res) => {
   const out = {}
   const today = new Date()
-  const y = today.getFullYear(), m = today.getMonth(), d = today.getDate()
+  const y = today.getFullYear()
+  const m = today.getMonth()
+  const d = today.getDate()
   const start = new Date(y, m, d).getTime()
   const end = start + 24 * 60 * 60 * 1000
   for (const [gameId, arr] of history.entries()) {
