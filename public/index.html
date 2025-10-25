@@ -2,84 +2,87 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>NBA Live Totals Dashboard</title>
+  <title>NBA Live Totals</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0"></script>
+  <link rel="preconnect" href="https://cdn.jsdelivr.net">
   <style>
-    body { font-family: system-ui, -apple-system, Arial; margin: 20px; color: #e8e8e8; background: #121212 }
-    h1 { font-size: 20px; margin: 0 0 12px }
-    .controls { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-bottom: 12px }
-    input[type="text"], input[type="number"] { padding: 8px 10px; border: 1px solid #444; background: #1c1c1c; color: #fff; border-radius: 6px }
-    button, select, label { padding: 8px 12px; border: 1px solid #444; background: #1c1c1c; color: #fff; border-radius: 6px; cursor: pointer }
-    .banner { padding: 8px 12px; background: #3b0f0f; color: #fff; border: 1px solid #6b1b1b; border-radius: 6px; margin-bottom: 12px; display: none }
-    .grid { width: 100%; overflow-x: auto; margin: 12px 0 16px }
-    table { width: 100%; border-collapse: collapse; font-size: 14px }
-    th, td { padding: 8px; border-bottom: 1px solid #2a2a2a; text-align: left; white-space: nowrap }
-    th { color: #bbb }
-    .muted { color: #aaa }
-    #wrap { height: 55vh }
-    .selected { background: #1f2a38 }
-    .hi { color: #ff9b86 }
-    .lo { color: #88d0ff }
+    body { background:#0f1115; color:#eaeef4; font:14px system-ui, -apple-system, Segoe UI, Roboto; margin:0; }
+    header { display:flex; gap:12px; align-items:center; padding:12px 16px; border-bottom:1px solid #222; }
+    input, select, button { background:#161a22; color:#eaeef4; border:1px solid #2a2f3a; border-radius:6px; padding:6px 8px; }
+    button { cursor:pointer; }
+    #lastFetch { opacity:.7 }
+    main { padding:12px 16px; }
+    table { width:100%; border-collapse:collapse; font-size:13px; }
+    th, td { padding:8px 10px; border-bottom:1px solid #1c2030; text-align:left; white-space:nowrap; }
+    thead th { position:sticky; top:0; background:#111419; z-index:1; }
+    tr:hover { background:#121622; }
+    tr.selected { outline:2px solid #2a7cf7; }
+    .hi { color:#18c26e; font-weight:600; }
+    .lo { color:#ff6b6b; font-weight:600; }
+    #chartWrap { height:340px; margin-top:12px; background:#0d1016; border:1px solid #1c2030; border-radius:8px; padding:8px; }
+    #error { display:none; margin:8px 0; padding:8px; border:1px solid #a33; background:#2a1111; color:#f7c6c6; }
+    .spacer { flex:1 }
+    label.chk { display:inline-flex; gap:6px; align-items:center; }
   </style>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/luxon@3/build/global/luxon.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1.3.1"></script>
 </head>
 <body>
-  <h1>NBA Live Totals Dashboard</h1>
-
-  <div class="controls">
-    <label><input type="checkbox" id="liveToggle" checked disabled> Live</label>
-    <label><input type="checkbox" id="todayOnly" checked> Today only</label>
+  <header>
+    <label class="chk"><input type="checkbox" id="liveToggle" checked> Live</label>
+    <label class="chk"><input type="checkbox" id="todayOnly" checked> Today only</label>
     <select id="bookmaker">
       <option value="draftkings" selected>DraftKings</option>
+      <option value="fanduel">FanDuel</option>
+      <option value="caesars">Caesars</option>
     </select>
-    <input id="search" type="text" placeholder="Filter by team name">
+    <input id="search" placeholder="Filter by team name" />
     <button id="refresh">Refresh now</button>
-    <span id="lastFetch" class="muted"></span>
-  </div>
+    <div id="lastFetch"></div>
+    <div class="spacer"></div>
+    <label class="chk"><input type="checkbox" id="showLive" checked> Show Live Total</label>
+    <label class="chk"><input type="checkbox" id="showProj" checked> Show Projection</label>
+    <input id="gapThres" type="number" value="5" style="width:64px" title="Alert gap ≥" />
+  </header>
 
-  <div class="controls">
-    <label>Alert gap ≥ <input id="gapThres" type="number" min="1" max="20" value="5"></label>
-    <label><input type="checkbox" id="showLive" checked> Show Live Total</label>
-    <label><input type="checkbox" id="showProj" checked> Show Projection</label>
-  </div>
+  <main>
+    <div id="error"></div>
+    <div style="overflow:auto; border:1px solid #1c2030; border-radius:8px;">
+      <table id="gamesTable">
+        <thead>
+          <tr>
+            <th>Away Team</th>
+            <th>Away Score</th>
+            <th>Home Team</th>
+            <th>Home Score</th>
+            <th>Current Total</th>
+            <th>Quarter</th>
+            <th>Clock</th>
+            <th>Projection</th>
+            <th>Live Total</th>
+            <th>Pace %</th>
+            <th>Δ5m</th>
+            <th>Gap</th>
+            <th>Tipoff</th>
+            <th>Last Update</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
 
-  <div id="error" class="banner"></div>
-
-  <div class="grid">
-    <table id="gamesTable">
-      <thead>
-        <tr>
-          <th>Away Team</th>
-          <th>Away Score</th>
-          <th>Home Team</th>
-          <th>Home Score</th>
-          <th>Current Total</th>
-          <th>Quarter</th>
-          <th>Clock</th>
-          <th>Projection</th>
-          <th>Live Total</th>
-          <th>Pace %</th>
-          <th>Δ5m</th>
-          <th>Gap</th>
-          <th>Tipoff</th>
-          <th>Last Update</th>
-        </tr>
-      </thead>
-      <tbody></tbody>
-    </table>
-  </div>
-
-  <div id="wrap">
-    <canvas id="chart"></canvas>
-  </div>
+    <div id="chartWrap">
+      <canvas id="chart"></canvas>
+    </div>
+  </main>
 
 <script>
   const REFRESH_MS = 60000
   const MAX_POINTS = 300
 
   const state = {
-    history: new Map(),
+    history: new Map(),  // id -> { label, live:[], proj:[], score:[] }
     chart: null,
     selectedGameId: null,
     lastRows: [],
@@ -89,11 +92,74 @@
 
   function gameLabel(row) { return `${row.away_team} @ ${row.home_team}` }
 
+  function isTodayLocal(iso) {
+    if (!iso) return false
+    const d = new Date(iso)
+    const now = new Date()
+    return d.getFullYear() === now.getFullYear() &&
+           d.getMonth() === now.getMonth() &&
+           d.getDate() === now.getDate()
+  }
+
+  function minutesElapsed(period, clock) {
+    if (!period) return null
+    if (clock && /^\d{1,2}:\d{2}$/.test(clock)) {
+      const [mm, ss] = clock.split(":").map(Number)
+      const perLen = period <= 4 ? 12 : 5
+      const elapsedInPeriod = perLen - mm - ss/60
+      if (period <= 4) return (period - 1) * 12 + Math.max(0, elapsedInPeriod)
+      const otNum = period - 4
+      return 48 + (otNum - 1) * 5 + Math.max(0, elapsedInPeriod)
+    }
+    if (period >= 4) return 36
+    if (period === 3) return 24
+    if (period === 2) return 12
+    if (period === 1) return 0
+    return null
+  }
+  function totalMinutes(period) { return period <= 4 ? 48 : 48 + 5*(period-4) }
+
+  function paceProjection(home, away, period, clock) {
+    if (home == null || away == null || period == null) return null
+    const elapsed = minutesElapsed(period, clock)
+    if (elapsed == null || elapsed <= 0) return null
+    const total = totalMinutes(period)
+    const current = Number(home) + Number(away)
+    const frac = Math.max(elapsed / total, 0.01)
+    return Math.round((current / frac) * 10) / 10
+  }
+
+  function pacePercent(currentTotal, liveTotal, period, clock) {
+    if (currentTotal == null || liveTotal == null || period == null) return null
+    const elapsed = minutesElapsed(period, clock)
+    const total = totalMinutes(period)
+    if (elapsed == null || elapsed <= 0) return null
+    const expectedSoFarAtLine = liveTotal * (elapsed / total)
+    if (expectedSoFarAtLine <= 0) return null
+    return Math.round((currentTotal / expectedSoFarAtLine) * 1000) / 10
+  }
+
+  function delta5m(gameId) {
+    const s = state.history.get(gameId)
+    if (!s || !s.live?.length) return null
+    const now = Date.now()
+    const cutoff = now - 5*60*1000
+    let oldest = null
+    for (let i = s.live.length - 1; i >= 0; i--) {
+      const p = s.live[i]
+      if (p.x <= cutoff) { oldest = p; break }
+    }
+    if (!oldest) oldest = s.live[0]
+    const latest = s.live[s.live.length - 1]
+    if (!latest || oldest.y == null || latest.y == null) return null
+    return Math.round((latest.y - oldest.y) * 10) / 10
+  }
+
   function upsertHistory(rows, scoreMap) {
     const now = Date.now()
     for (const r of rows) {
       const key = r.id
-      if (!state.history.has(key)) state.history.set(key, { label: gameLabel(r), live: [], proj: [] })
+      if (!state.history.has(key)) state.history.set(key, { label: gameLabel(r), live: [], proj: [], score: [] })
       const serie = state.history.get(key)
       if (typeof r.total_point === "number") {
         serie.live.push({ x: now, y: r.total_point })
@@ -106,64 +172,13 @@
         serie.proj.push({ x: now, y: p })
         if (serie.proj.length > MAX_POINTS) serie.proj.shift()
       }
+      if (sc.home_score != null && sc.away_score != null) {
+        const total = Number(sc.home_score) + Number(sc.away_score)
+        serie.score.push({ x: now, y: total })
+        if (serie.score.length > MAX_POINTS) serie.score.shift()
+      }
       serie.label = gameLabel(r)
     }
-  }
-
-  function isTodayLocal(iso) {
-    if (!iso) return false
-    const d = new Date(iso)
-    const now = new Date()
-    return d.getFullYear() === now.getFullYear()
-      && d.getMonth() === now.getMonth()
-      && d.getDate() === now.getDate()
-  }
-
-  function minutesElapsed(period, clock) {
-    if (!period || !clock) return null
-    const [mm, ss] = clock.split(":").map(Number)
-    const perLen = period <= 4 ? 12 : 5
-    const elapsedInPeriod = perLen - mm - ss/60
-    if (period <= 4) return (period - 1) * 12 + Math.max(0, elapsedInPeriod)
-    const otNum = period - 4
-    return 48 + (otNum - 1) * 5 + Math.max(0, elapsedInPeriod)
-  }
-  function totalMinutes(period) { return period <= 4 ? 48 : 48 + 5 * (period - 4) }
-
-  function paceProjection(home, away, period, clock) {
-    if (home == null || away == null || period == null || clock == null) return null
-    const elapsed = minutesElapsed(period, clock)
-    if (elapsed == null || elapsed <= 0) return null
-    const total = totalMinutes(period)
-    const current = Number(home) + Number(away)
-    const frac = Math.max(elapsed / total, 0.01)
-    return Math.round((current / frac) * 10) / 10
-  }
-
-  function pacePercent(currentTotal, liveTotal, period, clock) {
-    if (currentTotal == null || liveTotal == null || period == null || clock == null) return null
-    const elapsed = minutesElapsed(period, clock)
-    const total = totalMinutes(period)
-    if (elapsed == null || elapsed <= 0) return null
-    const expectedSoFarAtLine = liveTotal * (elapsed / total)
-    if (expectedSoFarAtLine <= 0) return null
-    return Math.round((currentTotal / expectedSoFarAtLine) * 1000) / 10
-  }
-
-  function delta5m(gameId) {
-    const s = state.history.get(gameId)
-    if (!s || !Array.isArray(s.live) || s.live.length === 0) return null
-    const now = Date.now()
-    const cutoff = now - 5 * 60 * 1000
-    let oldest = null
-    for (let i = s.live.length - 1; i >= 0; i--) {
-      const p = s.live[i]
-      if (p.x <= cutoff) { oldest = p; break }
-    }
-    if (!oldest) oldest = s.live[0]
-    const latest = s.live[s.live.length - 1]
-    if (!latest || oldest.y == null || latest.y == null) return null
-    return Math.round((latest.y - oldest.y) * 10) / 10
   }
 
   function metricsForRow(r, sc) {
@@ -209,58 +224,36 @@
         renderTable(state.lastRows)
       })
 
-      const tdAway = document.createElement("td")
-      const tdAwayScore = document.createElement("td")
-      const tdHome = document.createElement("td")
-      const tdHomeScore = document.createElement("td")
-      const tdCurrentTotal = document.createElement("td")
-      const tdQuarter = document.createElement("td")
-      const tdClock = document.createElement("td")
-      const tdProjection = document.createElement("td")
-      const tdLiveTotal = document.createElement("td")
-      const tdPace = document.createElement("td")
-      const tdD5 = document.createElement("td")
-      const tdGap = document.createElement("td")
-      const tdComm = document.createElement("td")
-      const tdUpdate = document.createElement("td")
+      const cells = [
+        r.away_team,
+        sc.away_score ?? "n/a",
+        r.home_team,
+        sc.home_score ?? "n/a",
+        currentTotal ?? "n/a",
+        sc.period ?? "n/a",
+        sc.clock ?? "n/a",
+        projection ?? "n/a",
+        r.total_point ?? "n/a",
+        pace != null ? `${pace}%` : "n/a",
+        d5 != null ? d5.toFixed(1) : "n/a",
+        gap ?? "n/a",
+        r.commence_time ? new Date(r.commence_time).toLocaleString() : "n/a",
+        r.bookmaker_last_update ? new Date(r.bookmaker_last_update).toLocaleTimeString() : "n/a"
+      ]
 
-      tdAway.textContent = r.away_team
-      tdAwayScore.textContent = sc.away_score ?? "n/a"
-      tdHome.textContent = r.home_team
-      tdHomeScore.textContent = sc.home_score ?? "n/a"
-      tdCurrentTotal.textContent = currentTotal ?? "n/a"
-      tdQuarter.textContent = sc.period ?? "n/a"
-      tdClock.textContent = sc.clock ?? "n/a"
-      tdProjection.textContent = projection ?? "n/a"
-      tdLiveTotal.textContent = r.total_point ?? "n/a"
-      tdPace.textContent = pace != null ? `${pace}%` : "n/a"
-      tdD5.textContent = d5 != null ? d5.toFixed(1) : "n/a"
-      tdGap.textContent = gap ?? "n/a"
+      cells.forEach((val, idx) => {
+        const td = document.createElement("td")
+        td.textContent = val
+        if (idx === 10 && typeof d5 === "number") td.className = d5 >= 2 ? "hi" : d5 <= -2 ? "lo" : ""
+        if (idx === 9 && typeof pace === "number") td.className = pace >= 105 ? "hi" : pace <= 95 ? "lo" : ""
+        if (idx === 11 && typeof gap === "number") td.className = Math.abs(gap) >= gapThres ? (gap > 0 ? "hi" : "lo") : ""
+        tr.appendChild(td)
+      })
 
-      if (gap != null && Math.abs(gap) >= gapThres) tdGap.className = gap > 0 ? "hi" : "lo"
-      if (pace != null) { if (pace >= 105) tdPace.className = "hi"; if (pace <= 95) tdPace.className = "lo" }
-      if (d5 != null) { if (d5 >= 2) tdD5.className = "hi"; if (d5 <= -2) tdD5.className = "lo" }
       if (pace != null && gap != null && d5 != null) {
         if (pace >= 105 && gap >= 5 && d5 >= 2) tr.classList.add("selected")
       }
 
-      tdComm.textContent = r.commence_time ? new Date(r.commence_time).toLocaleString() : "n/a"
-      tdUpdate.textContent = r.bookmaker_last_update ? new Date(r.bookmaker_last_update).toLocaleTimeString() : "n/a"
-
-      tr.appendChild(tdAway)
-      tr.appendChild(tdAwayScore)
-      tr.appendChild(tdHome)
-      tr.appendChild(tdHomeScore)
-      tr.appendChild(tdCurrentTotal)
-      tr.appendChild(tdQuarter)
-      tr.appendChild(tdClock)
-      tr.appendChild(tdProjection)
-      tr.appendChild(tdLiveTotal)
-      tr.appendChild(tdPace)
-      tr.appendChild(tdD5)
-      tr.appendChild(tdGap)
-      tr.appendChild(tdComm)
-      tr.appendChild(tdUpdate)
       tbody.appendChild(tr)
     }
   }
@@ -355,7 +348,9 @@
       const rows = await oddsRes.json()
       const scores = await scoresRes.json()
       state.lastRows = rows
-      state.scoreMap = new Map(scores.map(s => [`${(s.away_team||'').toLowerCase()}__${(s.home_team||'').toLowerCase()}`, s]))
+      state.scoreMap = new Map(
+        scores.map(s => [`${(s.away_team||'').toLowerCase()}__${(s.home_team||'').toLowerCase()}`, s])
+      )
       upsertHistory(rows, state.scoreMap)
       renderTable(rows)
       renderChart()
@@ -377,8 +372,6 @@
 
   fetchAll()
   setInterval(fetchAll, REFRESH_MS)
-
-  // Example pace math:
-  // Live total 230, elapsed 24 minutes. Expected at line = 115.
-  // If current total is 120, pacePercent ≈ 104.3%
 </script>
+</body>
+</html>
