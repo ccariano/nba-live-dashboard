@@ -65,7 +65,7 @@ function extractTeamTotals(g) {
   return { home_score: home, away_score: away }
 }
 
-// ESPN helper that tries multiple URLs
+// Replace your entire getEspnClockMap with this
 async function getEspnClockMap() {
   const now = Date.now()
   if (cache.espn && now - cache.espnTs < CACHE_MS) return cache.espn
